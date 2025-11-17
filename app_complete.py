@@ -5,6 +5,13 @@ import plotly.graph_objects as go
 from pathlib import Path
 from datetime import datetime
 import yaml
+import io
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib.enums import TA_CENTER
 
 # === PAGE CONFIG ===
 st.set_page_config(
@@ -35,14 +42,12 @@ PASSWORD = config['dashboard'].get('password', 'Demo2024')
 if not st.session_state.auth:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        # Try to load logo
         try:
             from PIL import Image
             logo_path = config['branding']['logo_file']
             if Path(logo_path).exists():
                 st.image(logo_path, width=150)
         except:
-            # Fallback: emoji icon
             st.markdown(
                 f"<div style='text-align: center; font-size: 60px; margin: 20px;'>📊</div>",
                 unsafe_allow_html=True
@@ -66,7 +71,6 @@ if not st.session_state.auth:
 def get_latest_files():
     """Find the revenue and costs files"""
     
-    # Try multiple locations
     possible_locations = [
         Path("data"),
         Path("."),
@@ -78,13 +82,11 @@ def get_latest_files():
     
     for location in possible_locations:
         if location.exists():
-            # Look for revenue file
             rev_pattern = config['data'].get('revenue_file_pattern', '*revenue*.xlsx')
             rev_files = list(location.glob(rev_pattern))
             if rev_files:
                 revenue_file = max(rev_files, key=lambda x: x.stat().st_mtime)
             
-            # Look for costs file
             cost_pattern = config['data'].get('costs_file_pattern', '*costs*.xlsx')
             cost_files = list(location.glob(cost_pattern))
             if cost_files:
@@ -111,40 +113,26 @@ def load_data():
     revenue_path, costs_path = get_latest_files()
     branches = config['data']['branches']
     
-    # === LOAD REVENUE FILE ===
-    # Your revenue file has this structure:
-    # Row 0: Title
-    # Row 1: Blank
-    # Row 2: Section header
-    # Row 3: Column headers (Description, Period, Date Range, branches...)
-    # Row 4+: Data (Private, LA, Live-In, TOTAL for each period)
-    
     revenue_raw = pd.read_excel(revenue_path, header=None)
     
-    # Find where the data starts (look for "TOTAL" rows which have actual revenue)
     data_list = []
     
     for idx, row in revenue_raw.iterrows():
-        # Skip header rows
         if idx < 4:
             continue
         
-        # Check if this is a TOTAL row (has actual revenue data)
         description = str(row[0]).strip()
         period_val = row[1]
         
-        # Skip blank rows
         if pd.isna(period_val) or period_val == '':
             continue
         
-        # Only process TOTAL rows (which have the full revenue for each period)
         if description.upper() == 'TOTAL':
             period = str(int(period_val))
             date_range = row[2] if not pd.isna(row[2]) else f"Period {period}"
             
-            # Extract revenue for each branch
             for i, branch in enumerate(branches):
-                col_idx = 3 + i  # Branches start at column 3 (0-indexed)
+                col_idx = 3 + i
                 revenue = pd.to_numeric(row[col_idx], errors='coerce')
                 
                 if not pd.isna(revenue) and revenue > 0:
@@ -157,15 +145,8 @@ def load_data():
     
     df = pd.DataFrame(data_list)
     
-    # === LOAD COSTS FILE ===
-    # Your costs file structure:
-    # Row 0: Section header
-    # Row 1: Column headers
-    # Row 2+: Data
+    costs_raw = pd.read_excel(costs_path, header=1)
     
-    costs_raw = pd.read_excel(costs_path, header=1)  # Skip first row, use row 1 as header
-    
-    # Build costs dataframe
     cost_data = []
     for idx, row in costs_raw.iterrows():
         period = row['Period']
@@ -187,20 +168,130 @@ def load_data():
     
     costs_df = pd.DataFrame(cost_data)
     
-    # === MERGE DATA ===
     df = df.merge(costs_df, on=['Period', 'Branch'], how='left')
     df['Cost'] = df['Cost'].fillna(0)
     
-    # === CALCULATE METRICS ===
     df['Gross Profit'] = df['Revenue'] - df['Cost']
     df['Margin %'] = ((df['Gross Profit'] / df['Revenue']) * 100).round(1)
     df['Margin %'] = df['Margin %'].fillna(0)
     
-    # Add period as integer for sorting
     df['Period_Int'] = df['Period'].astype(int)
     df = df.sort_values(['Period_Int', 'Branch'])
     
     return df, branches, revenue_path.name, costs_path.name
+
+# === PDF EXPORT FUNCTION ===
+def generate_pdf(filtered_df, branch_totals, total_revenue, total_cost, total_profit, avg_margin):
+    """Generate PDF report"""
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=18)
+    
+    story = []
+    styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontSize=24, 
+                                 textColor=colors.HexColor('#2c3e50'), spaceAfter=30, alignment=TA_CENTER)
+    
+    story.append(Paragraph(config['client']['name'], title_style))
+    story.append(Paragraph("Financial Analytics Report", styles['Heading2']))
+    story.append(Paragraph(f"Generated: {datetime.now():%B %d, %Y at %H:%M}", styles['Normal']))
+    story.append(Spacer(1, 0.3*inch))
+    
+    story.append(Paragraph("Executive Summary", styles['Heading2']))
+    story.append(Spacer(1, 0.1*inch))
+    
+    summary_data = [
+        ['Metric', 'Value'],
+        ['Total Revenue', f'£{total_revenue:,.0f}'],
+        ['Total Costs', f'£{total_cost:,.0f}'],
+        ['Gross Profit', f'£{total_profit:,.0f}'],
+        ['Average Margin', f'{avg_margin:.1f}%'],
+        ['Number of Periods', str(len(filtered_df['Period'].unique()))],
+        ['Number of Branches', str(len(filtered_df['Branch'].unique()))]
+    ]
+    
+    summary_table = Table(summary_data, colWidths=[3*inch, 2*inch])
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3498db')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    
+    story.append(summary_table)
+    story.append(Spacer(1, 0.3*inch))
+    
+    story.append(Paragraph("Branch Performance Summary", styles['Heading2']))
+    story.append(Spacer(1, 0.1*inch))
+    
+    branch_data = [['Branch', 'Revenue', 'Costs', 'Profit', 'Margin %']]
+    for _, row in branch_totals.iterrows():
+        branch_data.append([
+            row['Branch'],
+            f"£{row['Revenue']:,.0f}",
+            f"£{row['Cost']:,.0f}",
+            f"£{row['Gross Profit']:,.0f}",
+            f"{row['Margin %']:.1f}%"
+        ])
+    
+    branch_table = Table(branch_data, colWidths=[1.5*inch, 1.3*inch, 1.3*inch, 1.3*inch, 1*inch])
+    branch_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2ecc71')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    
+    story.append(branch_table)
+    story.append(Spacer(1, 0.3*inch))
+    
+    story.append(PageBreak())
+    story.append(Paragraph("Detailed Performance Data", styles['Heading2']))
+    story.append(Spacer(1, 0.1*inch))
+    
+    detail_data = [['Period', 'Branch', 'Revenue', 'Costs', 'Profit', 'Margin %']]
+    for _, row in filtered_df.iterrows():
+        detail_data.append([
+            row['Period'],
+            row['Branch'],
+            f"£{row['Revenue']:,.0f}",
+            f"£{row['Cost']:,.0f}",
+            f"£{row['Gross Profit']:,.0f}",
+            f"{row['Margin %']:.1f}%"
+        ])
+    
+    detail_table = Table(detail_data, colWidths=[0.8*inch, 1.3*inch, 1.2*inch, 1.2*inch, 1.2*inch, 0.9*inch])
+    detail_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e74c3c')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey])
+    ]))
+    
+    story.append(detail_table)
+    
+    story.append(Spacer(1, 0.5*inch))
+    footer_style = ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, textColor=colors.grey, alignment=TA_CENTER)
+    story.append(Paragraph(f"Report generated by {config['client']['name']} Dashboard System", footer_style))
+    story.append(Paragraph(f"Confidential - For internal use only", footer_style))
+    
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
 
 # === LOAD THE DATA ===
 try:
@@ -230,14 +321,12 @@ st.divider()
 # === SIDEBAR FILTERS ===
 st.sidebar.header("📊 Dashboard Controls")
 
-# Refresh button
 if st.sidebar.button("🔄 Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
 st.sidebar.divider()
 
-# Period filter
 all_periods = sorted(df['Period'].unique(), key=lambda x: int(x))
 period_option = st.sidebar.radio(
     "Period Selection",
@@ -257,7 +346,6 @@ else:
     if not sel_periods:
         sel_periods = all_periods
 
-# Branch filter
 st.sidebar.markdown("### Branch Selection")
 select_all = st.sidebar.checkbox("Select All Branches", value=True)
 
@@ -306,6 +394,23 @@ col2.metric("Total Costs", f"£{total_cost:,.0f}")
 col3.metric("Gross Profit", f"£{total_profit:,.0f}")
 col4.metric("Avg Margin", f"{avg_margin:.1f}%")
 col5.metric("Periods", num_periods)
+
+st.divider()
+
+# === PDF EXPORT BUTTON ===
+col1, col2, col3 = st.columns([1, 1, 1])
+with col2:
+    if st.button("📄 Export to PDF", type="primary", use_container_width=True):
+        with st.spinner("Generating PDF report..."):
+            pdf_buffer = generate_pdf(filtered_df, branch_totals, total_revenue, total_cost, total_profit, avg_margin)
+            st.download_button(
+                label="⬇️ Download PDF Report",
+                data=pdf_buffer,
+                file_name=f"Dashboard_Report_{datetime.now():%Y%m%d_%H%M}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+            st.success("✅ PDF generated successfully!")
 
 st.divider()
 
@@ -404,7 +509,7 @@ with tab2:
             'Cost': '£{:,.0f}',
             'Gross Profit': '£{:,.0f}',
             'Margin %': '{:.1f}%'
-        }).background_gradient(subset=['Margin %'], cmap='RdYlGn'),
+        }),
         use_container_width=True,
         height=250
     )
@@ -467,7 +572,6 @@ with tab4:
     
     st.divider()
     
-    # Download button
     csv = filtered_df.to_csv(index=False)
     st.download_button(
         label="⬇️ Download as CSV",
@@ -476,14 +580,13 @@ with tab4:
         mime="text/csv"
     )
     
-    # Display table
     st.dataframe(
         filtered_df[['Period', 'Date Range', 'Branch', 'Revenue', 'Cost', 'Gross Profit', 'Margin %']].style.format({
             'Revenue': '£{:,.0f}',
             'Cost': '£{:,.0f}',
             'Gross Profit': '£{:,.0f}',
             'Margin %': '{:.1f}%'
-        }).background_gradient(subset=['Margin %'], cmap='RdYlGn'),
+        }),
         use_container_width=True,
         height=500
     )
@@ -492,7 +595,6 @@ with tab4:
 st.divider()
 st.success("✅ Dashboard loaded successfully! All data processed correctly.")
 
-# Debug info in sidebar
 if st.sidebar.checkbox("Show Debug Info", value=False):
     st.sidebar.markdown("### Debug Information")
     st.sidebar.write(f"Total rows in df: {len(df)}")
