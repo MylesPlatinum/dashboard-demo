@@ -1,34 +1,33 @@
 # ========================================
-# CLIENT CONFIGURATION FILE
+# DEMO COMPANY CONFIGURATION
 # ========================================
-# This file controls all dashboard settings, branding, and data sources
 
 # === CLIENT INFORMATION ===
 client:
-  name: "Platinum Care Group"
-  id: "platinum_care"
-  contact_email: "support@platinumcare.co.uk"
+  name: "Demo Analytics Dashboard"
+  id: "demo_company"
+  contact_email: "demo@example.com"
 
 # === DASHBOARD SETTINGS ===
 dashboard:
-  title: "Platinum Care Dashboard"
-  subtitle: "Financial & Operational Analytics"
-  password: "PlatinumCare2024"
+  title: "Professional Analytics Dashboard"
+  subtitle: "Financial & Operational Insights"
+  password: "Demo2024"
 
 # === SUBSCRIPTION & FEATURES ===
 subscription:
-  tier: "Professional"  # Options: Basic, Professional, Enterprise
+  tier: "Professional"
   expiry_date: "2025-12-31"
 
 features:
   debug_mode: false
   pdf_export: true
-  care_type_breakdown: true
+  care_type_breakdown: false
   advanced_analytics: true
 
 # === BRANDING ===
 branding:
-  logo_file: "logo.png"  # Path to logo file
+  logo_file: "logo.png"
   primary_color: "#3498db"
   secondary_color: "#2ecc71"
   warning_color: "#e74c3c"
@@ -44,65 +43,35 @@ data:
   revenue_sheet: "Sheet1"
   costs_sheet: "Sheet1"
   
-  # Row positions for revenue data (0-indexed)
-  revenue_start_row: 3
-  revenue_end_row: 18
+  # Row positions (0-indexed)
+  # Your Excel has header in row 0, data starts row 1
+  revenue_start_row: 1
+  revenue_end_row: 4
   
-  # Row positions for hours data (0-indexed)
-  hours_start_row: 22
-  hours_end_row: 37
+  # No separate hours section in your Excel
+  hours_start_row: 1
+  hours_end_row: 4
   
-  # Branch names (must match Excel column headers)
+  # Branch names - MUST MATCH YOUR EXCEL EXACTLY
   branches:
-    - "Acre Care Bognor"
-    - "Acre Care Worthing"
-    - "PCS Hayling"
-    - "PCS Shoreham"
-    - "Safe Harbour"
+    - "Richmond"
+    - "Twickenham"
+    - "Kingston"
+    - "Hampton"
 
 # === CARE TYPE CATEGORIES ===
 care_types:
-  enabled: true
-  categories:
-    - name: "Private"
-      color: "#3498db"
-    - name: "Local Authority"
-      color: "#e74c3c"
-    - name: "Live-In"
-      color: "#f39c12"
+  enabled: false
 
 # === COMPANY VALUES (shown on login page) ===
 company_values:
-  show_on_login: true
-  
-  values:
-    - title: "Care"
-      tagline: "Making lives better"
-      description: "Caring for our service users is at the heart of everything we do. Showing kindness and compassion to our clients and each other will ensure that we deliver safe and well led care every day."
-    
-    - title: "Respect"
-      tagline: "We value people's differences"
-      description: "We believe in treating everyone with respect and dignity. We expect all of our team members to work with each other and users of our service in a respectful and dignified way at all times."
-    
-    - title: "Commitment"
-      tagline: "Dedicated to the success of our care provision"
-      description: "Working successfully in health care requires commitment. In exchange for your commitment and loyalty we will ensure everyone has the development and support they require to deliver effective care to the highest standards."
-  
-  mission:
-    title: "Making lives better"
-    description: "Our mission is applied to both our service users and our carers alike."
-    points:
-      - title: "Service Users"
-        text: "For our service users, we provide a care service that is completely tailored to their individual needs, wishes, wants, desires, and beliefs."
-      
-      - title: "Carers"
-        text: "By valuing and caring about the roles of our care team, we make them feel valued. We ensure good pay rates, staff benefits, exceptional training and support."
+  show_on_login: false
 
 # === ANALYTICS SETTINGS ===
 analytics:
-  default_periods: 12
-  margin_warning_threshold: 10  # Show warning if margin below this %
-  margin_good_threshold: 20     # Show green if margin above this %
+  default_periods: 4
+  margin_warning_threshold: 10
+  margin_good_threshold: 20
   
 # === CHART DEFAULTS ===
 charts:
