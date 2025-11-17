@@ -1,166 +1,501 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from pathlib import Path
 from datetime import datetime
 import yaml
 
+# === PAGE CONFIG ===
+st.set_page_config(
+    page_title="Professional Analytics Dashboard", 
+    layout="wide", 
+    initial_sidebar_state="expanded"
+)
+
 # === LOAD CONFIG ===
 @st.cache_resource
 def load_config():
+    """Load configuration from config.yaml"""
     try:
         with open('config.yaml', 'r') as f:
             return yaml.safe_load(f)
     except FileNotFoundError:
-        st.error("config.yaml not found!")
+        st.error("❌ config.yaml not found! Please upload it to your repository.")
         st.stop()
 
 config = load_config()
 
-st.set_page_config(page_title=config['dashboard']['title'], layout="wide", initial_sidebar_state="expanded")
-
-# === PASSWORD ===
+# === PASSWORD PROTECTION ===
 if "auth" not in st.session_state:
     st.session_state.auth = False
 
-PASSWORD = config['dashboard']['password']
+PASSWORD = config['dashboard'].get('password', 'Demo2024')
+
 if not st.session_state.auth:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
+        # Try to load logo
         try:
             from PIL import Image
-            if Path(config['branding']['logo_file']).exists():
-                st.image(config['branding']['logo_file'], width=150)
+            logo_path = config['branding']['logo_file']
+            if Path(logo_path).exists():
+                st.image(logo_path, width=150)
         except:
+            # Fallback: emoji icon
             st.markdown(
-                f"<div style='text-align: center; font-size: 60px; margin: 20px; color: {config['branding']['primary_color']};'>Office Building</div>",
+                f"<div style='text-align: center; font-size: 60px; margin: 20px;'>📊</div>",
                 unsafe_allow_html=True
             )
+        
         st.markdown(f"<h1 style='text-align: center;'>{config['client']['name']}</h1>", unsafe_allow_html=True)
         st.markdown(f"<p style='text-align: center; color: #888;'>{config['dashboard']['subtitle']}</p>", unsafe_allow_html=True)
-        pwd = st.text_input("Password", type="password")
+        
+        pwd = st.text_input("Enter Password", type="password", key="password_input")
+        
         if pwd == PASSWORD:
             st.session_state.auth = True
             st.rerun()
         elif pwd:
-            st.error("Wrong password")
+            st.error("❌ Incorrect password")
+    
     st.stop()
 
-# === DEBUG MODE ===
-debug_mode = st.sidebar.checkbox("Debug Mode", value=False)
-
-# === FIND LATEST FILES ===
+# === FIND DATA FILES ===
 @st.cache_data(ttl=60)
 def get_latest_files():
-    data_dir = Path("data")
-    if not data_dir.exists():
-        st.error("No 'data' folder found!")
+    """Find the revenue and costs files"""
+    
+    # Try multiple locations
+    possible_locations = [
+        Path("data"),
+        Path("."),
+        Path("uploads")
+    ]
+    
+    revenue_file = None
+    costs_file = None
+    
+    for location in possible_locations:
+        if location.exists():
+            # Look for revenue file
+            rev_pattern = config['data'].get('revenue_file_pattern', '*revenue*.xlsx')
+            rev_files = list(location.glob(rev_pattern))
+            if rev_files:
+                revenue_file = max(rev_files, key=lambda x: x.stat().st_mtime)
+            
+            # Look for costs file
+            cost_pattern = config['data'].get('costs_file_pattern', '*costs*.xlsx')
+            cost_files = list(location.glob(cost_pattern))
+            if cost_files:
+                costs_file = max(cost_files, key=lambda x: x.stat().st_mtime)
+            
+            if revenue_file and costs_file:
+                break
+    
+    if not revenue_file:
+        st.error("❌ Revenue file not found! Please upload a file matching pattern: " + config['data']['revenue_file_pattern'])
         st.stop()
+    
+    if not costs_file:
+        st.error("❌ Costs file not found! Please upload a file matching pattern: " + config['data']['costs_file_pattern'])
+        st.stop()
+    
+    return revenue_file, costs_file
 
-    rev_files = list(data_dir.glob(config['data']['revenue_file_pattern']))
-    cost_files = list(data_dir.glob(config['data']['costs_file_pattern']))
-
-    if not rev_files: st.error("No revenue file found!"); st.stop()
-    if not cost_files: st.error("No costs file found!"); st.stop()
-
-    return max(rev_files, key=lambda x: x.stat().st_mtime), max(cost_files, key=lambda x: x.stat().st_mtime)
-
-# === LOAD DATA (NOW BULLETPROOF) ===
+# === LOAD DATA ===
 @st.cache_data(ttl=60)
 def load_data():
+    """Load and process the Excel files"""
+    
     revenue_path, costs_path = get_latest_files()
     branches = config['data']['branches']
-
-    if debug_mode:
-        st.sidebar.write(f"Revenue: {revenue_path.name}")
-        st.sidebar.write(f"Costs: {costs_path.name}")
-
-    # AUTO-DETECT SHEET NAME (this fixes the "Sheet1 not found" error forever)
-    with pd.ExcelFile(revenue_path) as xls:
-        sheet_name = xls.sheet_names[0]  # always use first sheet
-        revenue_raw = pd.read_excel(xls, sheet_name=sheet_name, header=None)
-
-    # Your existing row numbers from config
-    rev_start = config['data']['revenue_start_row']
-    rev_end   = config['data']['revenue_end_row']
-    hrs_start = config['data']['hours_start_row']
-    hrs_end   = config['data']['hours_end_row']
-
-    revenue_section = revenue_raw.iloc[rev_start:rev_end+1].copy()
-    hours_section   = revenue_raw.iloc[hrs_start:hrs_end+1].copy()
-
-    # Build data
+    
+    # === LOAD REVENUE FILE ===
+    # Your revenue file has this structure:
+    # Row 0: Title
+    # Row 1: Blank
+    # Row 2: Section header
+    # Row 3: Column headers (Description, Period, Date Range, branches...)
+    # Row 4+: Data (Private, LA, Live-In, TOTAL for each period)
+    
+    revenue_raw = pd.read_excel(revenue_path, header=None)
+    
+    # Find where the data starts (look for "TOTAL" rows which have actual revenue)
     data_list = []
-    for i, period in enumerate(revenue_section.iloc[:, 1].astype(str)):
-        if period.strip() and period != 'nan':
-            for j, branch in enumerate(branches):
-                col_idx = j + 3
-                rev = pd.to_numeric(revenue_section.iloc[i, col_idx], errors='coerce') or 0
-                hrs = pd.to_numeric(hours_section.iloc[i, col_idx], errors='coerce') or 0
-                if rev > 0:
+    
+    for idx, row in revenue_raw.iterrows():
+        # Skip header rows
+        if idx < 4:
+            continue
+        
+        # Check if this is a TOTAL row (has actual revenue data)
+        description = str(row[0]).strip()
+        period_val = row[1]
+        
+        # Skip blank rows
+        if pd.isna(period_val) or period_val == '':
+            continue
+        
+        # Only process TOTAL rows (which have the full revenue for each period)
+        if description.upper() == 'TOTAL':
+            period = str(int(period_val))
+            date_range = row[2] if not pd.isna(row[2]) else f"Period {period}"
+            
+            # Extract revenue for each branch
+            for i, branch in enumerate(branches):
+                col_idx = 3 + i  # Branches start at column 3 (0-indexed)
+                revenue = pd.to_numeric(row[col_idx], errors='coerce')
+                
+                if not pd.isna(revenue) and revenue > 0:
                     data_list.append({
-                        'Period': period.strip(),
+                        'Period': period,
+                        'Date Range': date_range,
                         'Branch': branch,
-                        'Revenue': rev,
-                        'Hours': hrs
+                        'Revenue': revenue
                     })
-
+    
     df = pd.DataFrame(data_list)
-
-    # COSTS — also auto-detect sheet + skip junk row
-    costs_raw = pd.read_excel(costs_path, header=1)  # skips Description row
-    costs_raw.columns = ['Period'] + branches + ['Total']
-    costs_clean = costs_raw[costs_raw['Period'].notna()].copy()
-    costs_clean['Period'] = costs_clean['Period'].astype(str).str.extract('(\d+)')[0]
-
-    cost_melt = costs_clean.melt(id_vars='Period', value_vars=branches, var_name='Branch', value_name='Cost')
-    cost_melt['Cost'] = pd.to_numeric(cost_melt['Cost'], errors='coerce').fillna(0)
-
-    df = df.merge(cost_melt, on=['Period', 'Branch'], how='left').fillna({'Cost': 0})
-
-    # Calculations
+    
+    # === LOAD COSTS FILE ===
+    # Your costs file structure:
+    # Row 0: Section header
+    # Row 1: Column headers
+    # Row 2+: Data
+    
+    costs_raw = pd.read_excel(costs_path, header=1)  # Skip first row, use row 1 as header
+    
+    # Build costs dataframe
+    cost_data = []
+    for idx, row in costs_raw.iterrows():
+        period = row['Period']
+        
+        if pd.isna(period):
+            continue
+        
+        period = str(int(period))
+        
+        for branch in branches:
+            if branch in costs_raw.columns:
+                cost = pd.to_numeric(row[branch], errors='coerce')
+                if not pd.isna(cost):
+                    cost_data.append({
+                        'Period': period,
+                        'Branch': branch,
+                        'Cost': cost
+                    })
+    
+    costs_df = pd.DataFrame(cost_data)
+    
+    # === MERGE DATA ===
+    df = df.merge(costs_df, on=['Period', 'Branch'], how='left')
+    df['Cost'] = df['Cost'].fillna(0)
+    
+    # === CALCULATE METRICS ===
     df['Gross Profit'] = df['Revenue'] - df['Cost']
-    df['Margin %'] = (df['Gross Profit'] / df['Revenue'] * 100).round(1).fillna(0)
-    df['Rev per Hour'] = (df['Revenue'] / df['Hours'].replace(0, 1)).round(2)
+    df['Margin %'] = ((df['Gross Profit'] / df['Revenue']) * 100).round(1)
+    df['Margin %'] = df['Margin %'].fillna(0)
+    
+    # Add period as integer for sorting
     df['Period_Int'] = df['Period'].astype(int)
     df = df.sort_values(['Period_Int', 'Branch'])
-
+    
     return df, branches, revenue_path.name, costs_path.name
 
-df, branches, rev_file, cost_file = load_data()
+# === LOAD THE DATA ===
+try:
+    df, branches, rev_file, cost_file = load_data()
+except Exception as e:
+    st.error(f"❌ Error loading data: {str(e)}")
+    st.code(str(e))
+    st.stop()
 
-# === UI ===
+# === HEADER ===
 col1, col2 = st.columns([1, 5])
 with col1:
     try:
         from PIL import Image
-        if Path(config['branding']['logo_file']).exists():
-            st.image(config['branding']['logo_file'], width=80)
-    except: pass
+        logo_path = config['branding']['logo_file']
+        if Path(logo_path).exists():
+            st.image(logo_path, width=80)
+    except:
+        st.markdown("📊")
+
 with col2:
-    st.title(f"{config['client']['name']} – Dashboard")
-    st.markdown(f"**Files:** `{rev_file}` | `{cost_file}` • {datetime.now():%d %b %Y, %H:%M}")
+    st.title(f"📊 {config['client']['name']}")
+    st.markdown(f"**Data Sources:** `{rev_file}` | `{cost_file}` | **Updated:** {datetime.now():%d %b %Y, %H:%M}")
 
-# Filters
-all_periods = sorted(df['Period'].unique(), key=int)
-sel_periods = st.sidebar.multiselect("Periods", all_periods, default=all_periods[-3:])
-sel_branches = st.sidebar.multiselect("Branches", branches, default=branches)
+st.divider()
 
-filtered = df[df['Period'].isin(sel_periods) & df['Branch'].isin(sel_branches)]
+# === SIDEBAR FILTERS ===
+st.sidebar.header("📊 Dashboard Controls")
 
-# KPIs
-totals = filtered.agg({'Revenue': 'sum', 'Hours': 'sum', 'Cost': 'sum', 'Gross Profit': 'sum'})
-avg_margin = filtered['Margin %'].mean()
+# Refresh button
+if st.sidebar.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
 
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Revenue", f"£{totals['Revenue']:,.0f}")
-c2.metric("Hours", f"{totals['Hours']:,.0f}")
-c3.metric("Costs", f"£{totals['Cost']:,.0f}")
-c4.metric("Profit", f"£{totals['Gross Profit']:,.0f}")
-c5.metric("Margin", f"{avg_margin:.1f}%")
+st.sidebar.divider()
 
-# Charts
-st.plotly_chart(px.line(filtered, x='Period', y='Revenue', color='Branch', title="Revenue Trend"), use_container_width=True)
-st.plotly_chart(px.bar(filtered.groupby('Branch').agg({'Gross Profit': 'sum'}).reset_index(), x='Branch', y='Gross Profit', title="Profit by Branch"), use_container_width=True)
+# Period filter
+all_periods = sorted(df['Period'].unique(), key=lambda x: int(x))
+period_option = st.sidebar.radio(
+    "Period Selection",
+    ["All Periods", "Latest Period", "Custom Selection"]
+)
 
-st.success("Dashboard loaded perfectly – all sheet name issues fixed!")
+if period_option == "All Periods":
+    sel_periods = all_periods
+elif period_option == "Latest Period":
+    sel_periods = [all_periods[-1]]
+else:
+    sel_periods = st.sidebar.multiselect(
+        "Select Periods",
+        all_periods,
+        default=all_periods
+    )
+    if not sel_periods:
+        sel_periods = all_periods
+
+# Branch filter
+st.sidebar.markdown("### Branch Selection")
+select_all = st.sidebar.checkbox("Select All Branches", value=True)
+
+if select_all:
+    sel_branches = branches
+else:
+    sel_branches = st.sidebar.multiselect(
+        "Choose Branches",
+        branches,
+        default=branches
+    )
+    if not sel_branches:
+        sel_branches = branches
+
+st.sidebar.divider()
+st.sidebar.success(f"✅ Viewing: {len(sel_periods)} period(s) × {len(sel_branches)} branch(es)")
+
+# === FILTER DATA ===
+filtered_df = df[df['Period'].isin(sel_periods) & df['Branch'].isin(sel_branches)].copy()
+
+if len(filtered_df) == 0:
+    st.error("⚠️ No data matches your current filters!")
+    st.stop()
+
+# === AGGREGATE BY BRANCH ===
+branch_totals = filtered_df.groupby('Branch').agg({
+    'Revenue': 'sum',
+    'Cost': 'sum',
+    'Gross Profit': 'sum'
+}).reset_index()
+branch_totals['Margin %'] = ((branch_totals['Gross Profit'] / branch_totals['Revenue']) * 100).round(1)
+
+# === KPI METRICS ===
+st.header("📈 Key Performance Indicators")
+
+col1, col2, col3, col4, col5 = st.columns(5)
+
+total_revenue = filtered_df['Revenue'].sum()
+total_cost = filtered_df['Cost'].sum()
+total_profit = filtered_df['Gross Profit'].sum()
+avg_margin = filtered_df['Margin %'].mean()
+num_periods = len(sel_periods)
+
+col1.metric("Total Revenue", f"£{total_revenue:,.0f}")
+col2.metric("Total Costs", f"£{total_cost:,.0f}")
+col3.metric("Gross Profit", f"£{total_profit:,.0f}")
+col4.metric("Avg Margin", f"{avg_margin:.1f}%")
+col5.metric("Periods", num_periods)
+
+st.divider()
+
+# === TABS ===
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📈 Revenue Trends",
+    "🏢 Branch Comparison",
+    "💰 Profitability Analysis",
+    "📊 Data Table"
+])
+
+# === TAB 1: REVENUE TRENDS ===
+with tab1:
+    st.subheader("Revenue & Margin Trends Over Time")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### Revenue by Branch")
+        fig_rev = px.line(
+            filtered_df,
+            x='Period_Int',
+            y='Revenue',
+            color='Branch',
+            markers=True,
+            color_discrete_sequence=px.colors.qualitative.Set2
+        )
+        fig_rev.update_layout(
+            height=400,
+            xaxis_title="Period",
+            yaxis_title="Revenue (£)",
+            hovermode='x unified'
+        )
+        st.plotly_chart(fig_rev, use_container_width=True)
+    
+    with col2:
+        st.markdown("#### Margin % by Branch")
+        fig_margin = px.line(
+            filtered_df,
+            x='Period_Int',
+            y='Margin %',
+            color='Branch',
+            markers=True,
+            color_discrete_sequence=px.colors.qualitative.Pastel
+        )
+        fig_margin.update_layout(
+            height=400,
+            xaxis_title="Period",
+            yaxis_title="Margin %",
+            hovermode='x unified'
+        )
+        st.plotly_chart(fig_margin, use_container_width=True)
+
+# === TAB 2: BRANCH COMPARISON ===
+with tab2:
+    st.subheader("Branch Performance Comparison")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### Total Revenue by Branch")
+        fig_branch_rev = px.bar(
+            branch_totals.sort_values('Revenue', ascending=True),
+            y='Branch',
+            x='Revenue',
+            orientation='h',
+            color='Revenue',
+            color_continuous_scale='Blues',
+            text='Revenue'
+        )
+        fig_branch_rev.update_traces(texttemplate='£%{text:,.0f}', textposition='outside')
+        fig_branch_rev.update_layout(height=400, showlegend=False)
+        st.plotly_chart(fig_branch_rev, use_container_width=True)
+    
+    with col2:
+        st.markdown("#### Margin % by Branch")
+        fig_margin_bar = px.bar(
+            branch_totals.sort_values('Margin %', ascending=True),
+            y='Branch',
+            x='Margin %',
+            orientation='h',
+            color='Margin %',
+            color_continuous_scale='RdYlGn',
+            text='Margin %'
+        )
+        fig_margin_bar.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+        fig_margin_bar.update_layout(height=400, showlegend=False)
+        st.plotly_chart(fig_margin_bar, use_container_width=True)
+    
+    st.divider()
+    
+    st.markdown("#### Branch Summary Table")
+    st.dataframe(
+        branch_totals.style.format({
+            'Revenue': '£{:,.0f}',
+            'Cost': '£{:,.0f}',
+            'Gross Profit': '£{:,.0f}',
+            'Margin %': '{:.1f}%'
+        }).background_gradient(subset=['Margin %'], cmap='RdYlGn'),
+        use_container_width=True,
+        height=250
+    )
+
+# === TAB 3: PROFITABILITY ===
+with tab3:
+    st.subheader("Profitability Analysis")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### Revenue vs Cost by Branch")
+        
+        fig_rev_cost = go.Figure()
+        fig_rev_cost.add_trace(go.Bar(
+            name='Revenue',
+            x=branch_totals['Branch'],
+            y=branch_totals['Revenue'],
+            marker_color='#3498db'
+        ))
+        fig_rev_cost.add_trace(go.Bar(
+            name='Cost',
+            x=branch_totals['Branch'],
+            y=branch_totals['Cost'],
+            marker_color='#e74c3c'
+        ))
+        fig_rev_cost.update_layout(
+            barmode='group',
+            height=400,
+            xaxis_title="Branch",
+            yaxis_title="Amount (£)"
+        )
+        st.plotly_chart(fig_rev_cost, use_container_width=True)
+    
+    with col2:
+        st.markdown("#### Gross Profit by Branch")
+        fig_profit = px.bar(
+            branch_totals.sort_values('Gross Profit', ascending=False),
+            x='Branch',
+            y='Gross Profit',
+            color='Gross Profit',
+            color_continuous_scale='Greens',
+            text='Gross Profit'
+        )
+        fig_profit.update_traces(texttemplate='£%{text:,.0f}', textposition='outside')
+        fig_profit.update_layout(height=400, showlegend=False)
+        st.plotly_chart(fig_profit, use_container_width=True)
+
+# === TAB 4: DATA TABLE ===
+with tab4:
+    st.subheader("Complete Dataset")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Records", len(filtered_df))
+    with col2:
+        st.metric("Periods Shown", len(sel_periods))
+    with col3:
+        st.metric("Branches Shown", len(sel_branches))
+    
+    st.divider()
+    
+    # Download button
+    csv = filtered_df.to_csv(index=False)
+    st.download_button(
+        label="⬇️ Download as CSV",
+        data=csv,
+        file_name=f"dashboard_data_{datetime.now():%Y%m%d}.csv",
+        mime="text/csv"
+    )
+    
+    # Display table
+    st.dataframe(
+        filtered_df[['Period', 'Date Range', 'Branch', 'Revenue', 'Cost', 'Gross Profit', 'Margin %']].style.format({
+            'Revenue': '£{:,.0f}',
+            'Cost': '£{:,.0f}',
+            'Gross Profit': '£{:,.0f}',
+            'Margin %': '{:.1f}%'
+        }).background_gradient(subset=['Margin %'], cmap='RdYlGn'),
+        use_container_width=True,
+        height=500
+    )
+
+# === FOOTER ===
+st.divider()
+st.success("✅ Dashboard loaded successfully! All data processed correctly.")
+
+# Debug info in sidebar
+if st.sidebar.checkbox("Show Debug Info", value=False):
+    st.sidebar.markdown("### Debug Information")
+    st.sidebar.write(f"Total rows in df: {len(df)}")
+    st.sidebar.write(f"Filtered rows: {len(filtered_df)}")
+    st.sidebar.write(f"Branches: {branches}")
+    st.sidebar.write(f"Periods: {sorted(df['Period'].unique())}")

@@ -1,10 +1,10 @@
 # ========================================
-# DEMO COMPANY CONFIGURATION
+# DEMO DASHBOARD CONFIGURATION - CORRECTED
 # ========================================
 
 # === CLIENT INFORMATION ===
 client:
-  name: "Demo Analytics Dashboard"
+  name: "Professional Analytics Demo"
   id: "demo_company"
   contact_email: "demo@example.com"
 
@@ -22,7 +22,7 @@ subscription:
 features:
   debug_mode: false
   pdf_export: true
-  care_type_breakdown: false
+  care_type_breakdown: true
   advanced_analytics: true
 
 # === BRANDING ===
@@ -36,21 +36,9 @@ branding:
 # === DATA SOURCES ===
 data:
   # File patterns for auto-detection
+  # These patterns will find your files: revenue.xlsx and costs.xlsx
   revenue_file_pattern: "*revenue*.xlsx"
   costs_file_pattern: "*costs*.xlsx"
-  
-  # Excel sheet names
-  revenue_sheet: "Sheet1"
-  costs_sheet: "Sheet1"
-  
-  # Row positions (0-indexed)
-  # Your Excel has header in row 0, data starts row 1
-  revenue_start_row: 1
-  revenue_end_row: 4
-  
-  # No separate hours section in your Excel
-  hours_start_row: 1
-  hours_end_row: 4
   
   # Branch names - MUST MATCH YOUR EXCEL EXACTLY
   branches:
@@ -58,14 +46,6 @@ data:
     - "Twickenham"
     - "Kingston"
     - "Hampton"
-
-# === CARE TYPE CATEGORIES ===
-care_types:
-  enabled: false
-
-# === COMPANY VALUES (shown on login page) ===
-company_values:
-  show_on_login: false
 
 # === ANALYTICS SETTINGS ===
 analytics:
