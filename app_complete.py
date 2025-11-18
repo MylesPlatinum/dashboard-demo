@@ -12,6 +12,8 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER
+import plotly.io as pio
+from reportlab.platypus import Image as RLImage
 
 # === PAGE CONFIG ===
 st.set_page_config(
@@ -180,114 +182,142 @@ def load_data():
     
     return df, branches, revenue_path.name, costs_path.name
 
-# === PDF EXPORT FUNCTION ===
-def generate_pdf(filtered_df, branch_totals, total_revenue, total_cost, total_profit, avg_margin):
-    """Generate PDF report"""
+def generate_premium_pdf(filtered_df, branch_totals, total_revenue, total_cost, total_profit, avg_margin):
+    """Generate PREMIUM PDF with charts - makes £495 look like theft!"""
     
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=18)
-    
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=50, leftMargin=50, topMargin=40, bottomMargin=40)
     story = []
     styles = getSampleStyleSheet()
     
-    title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontSize=24, 
-                                 textColor=colors.HexColor('#2c3e50'), spaceAfter=30, alignment=TA_CENTER)
+    # Premium styling
+    title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontSize=28, 
+                                 textColor=colors.HexColor('#1a1a1a'), spaceAfter=5, 
+                                 alignment=TA_CENTER, fontName='Helvetica-Bold')
     
+    heading_style = ParagraphStyle('CustomHeading', parent=styles['Heading2'], fontSize=18, 
+                                   textColor=colors.HexColor('#2c3e50'), spaceAfter=15, spaceBefore=20,
+                                   fontName='Helvetica-Bold', borderWidth=2, 
+                                   borderColor=colors.HexColor('#3498db'), borderPadding=10,
+                                   backColor=colors.HexColor('#ecf0f1'))
+    
+    body_style = ParagraphStyle('CustomBody', parent=styles['Normal'], fontSize=11, leading=14)
+    
+    # COVER PAGE
+    story.append(Spacer(1, 1.5*inch))
     story.append(Paragraph(config['client']['name'], title_style))
-    story.append(Paragraph("Financial Analytics Report", styles['Heading2']))
-    story.append(Paragraph(f"Generated: {datetime.now():%B %d, %Y at %H:%M}", styles['Normal']))
-    story.append(Spacer(1, 0.3*inch))
+    story.append(Paragraph("EXECUTIVE FINANCIAL DASHBOARD REPORT", 
+                          ParagraphStyle('Sub', parent=styles['Normal'], fontSize=16, 
+                                       textColor=colors.HexColor('#3498db'), alignment=TA_CENTER,
+                                       fontName='Helvetica-Bold', spaceAfter=30)))
+    story.append(Spacer(1, 0.5*inch))
     
-    story.append(Paragraph("Executive Summary", styles['Heading2']))
-    story.append(Spacer(1, 0.1*inch))
+    # KPI Box
+    kpi_data = [['REVENUE', 'PROFIT', 'MARGIN', 'BRANCHES'],
+                [f'£{total_revenue:,.0f}', f'£{total_profit:,.0f}', f'{avg_margin:.1f}%', str(len(branch_totals))]]
+    kpi_table = Table(kpi_data, colWidths=[1.6*inch]*4)
+    kpi_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
+        ('BACKGROUND', (0, 1), (-1, 1), colors.HexColor('#ecf0f1')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('TEXTCOLOR', (0, 1), (-1, 1), colors.HexColor('#2c3e50')),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 1), (-1, 1), 16),
+        ('TOPPADDING', (0, 0), (-1, -1), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+        ('GRID', (0, 0), (-1, -1), 2, colors.HexColor('#3498db'))
+    ]))
+    story.append(kpi_table)
+    story.append(PageBreak())
+    
+    # EXECUTIVE SUMMARY
+    story.append(Paragraph("EXECUTIVE SUMMARY", heading_style))
+    top_branch = branch_totals.loc[branch_totals['Revenue'].idxmax()]
+    
+    summary_text = f'<para fontSize="11"><b>Top Performer:</b> {top_branch["Branch"]} with £{top_branch["Revenue"]:,.0f} revenue<br/><b>Analysis:</b> {len(branch_totals)} branches, {len(filtered_df["Period"].unique())} periods, £{total_profit:,.0f} profit</para>'
+    story.append(Paragraph(summary_text, body_style))
+    story.append(Spacer(1, 0.2*inch))
     
     summary_data = [
-        ['Metric', 'Value'],
-        ['Total Revenue', f'£{total_revenue:,.0f}'],
-        ['Total Costs', f'£{total_cost:,.0f}'],
-        ['Gross Profit', f'£{total_profit:,.0f}'],
-        ['Average Margin', f'{avg_margin:.1f}%'],
-        ['Number of Periods', str(len(filtered_df['Period'].unique()))],
-        ['Number of Branches', str(len(filtered_df['Branch'].unique()))]
+        ['Metric', 'Value', 'Analysis'],
+        ['Total Revenue', f'£{total_revenue:,.0f}', f'{len(filtered_df)} transactions'],
+        ['Gross Profit', f'£{total_profit:,.0f}', f'{avg_margin:.1f}% margin'],
+        ['Active Branches', str(len(branch_totals)), 'All locations']
     ]
-    
-    summary_table = Table(summary_data, colWidths=[3*inch, 2*inch])
+    summary_table = Table(summary_data, colWidths=[2*inch, 1.5*inch, 2.5*inch])
     summary_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3498db')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+        ('TOPPADDING', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 10)
     ]))
-    
     story.append(summary_table)
-    story.append(Spacer(1, 0.3*inch))
+    story.append(PageBreak())
     
-    story.append(Paragraph("Branch Performance Summary", styles['Heading2']))
-    story.append(Spacer(1, 0.1*inch))
+    # REVENUE CHART
+    story.append(Paragraph("REVENUE TREND ANALYSIS", heading_style))
+    fig_rev = px.line(filtered_df, x='Period_Int', y='Revenue', color='Branch', markers=True,
+                      title="Revenue Performance by Branch",
+                      color_discrete_sequence=px.colors.qualitative.Set2)
+    fig_rev.update_layout(height=400, plot_bgcolor='white', paper_bgcolor='white', showlegend=True,
+                         legend=dict(orientation="h", yanchor="bottom", y=-0.3))
     
-    branch_data = [['Branch', 'Revenue', 'Costs', 'Profit', 'Margin %']]
+    # EXPORT CHART AS IMAGE
+    img_bytes = pio.to_image(fig_rev, format='png', width=700, height=400, scale=2)
+    img = io.BytesIO(img_bytes)
+    chart_image = RLImage(img, width=6.5*inch, height=3.7*inch)
+    story.append(chart_image)
+    story.append(PageBreak())
+    
+    # BRANCH COMPARISON CHARTS
+    story.append(Paragraph("BRANCH COMPARISON", heading_style))
+    
+    fig_branch = px.bar(branch_totals.sort_values('Revenue', ascending=True), y='Branch', x='Revenue',
+                        orientation='h', color='Revenue', color_continuous_scale='Blues', text='Revenue')
+    fig_branch.update_traces(texttemplate='£%{text:,.0f}', textposition='outside')
+    fig_branch.update_layout(height=350, showlegend=False, plot_bgcolor='white')
+    
+    img_bytes2 = pio.to_image(fig_branch, format='png', width=700, height=350, scale=2)
+    img2 = io.BytesIO(img_bytes2)
+    story.append(RLImage(img2, width=6.5*inch, height=3.2*inch))
+    story.append(Spacer(1, 0.2*inch))
+    
+    fig_margin = px.bar(branch_totals.sort_values('Margin %', ascending=True), y='Branch', x='Margin %',
+                        orientation='h', color='Margin %', color_continuous_scale='RdYlGn', text='Margin %')
+    fig_margin.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+    fig_margin.update_layout(height=350, showlegend=False, plot_bgcolor='white')
+    
+    img_bytes3 = pio.to_image(fig_margin, format='png', width=700, height=350, scale=2)
+    img3 = io.BytesIO(img_bytes3)
+    story.append(RLImage(img3, width=6.5*inch, height=3.2*inch))
+    story.append(PageBreak())
+    
+    # BRANCH TABLE
+    branch_data = [['Branch', 'Revenue', 'Costs', 'Profit', 'Margin']]
     for _, row in branch_totals.iterrows():
-        branch_data.append([
-            row['Branch'],
-            f"£{row['Revenue']:,.0f}",
-            f"£{row['Cost']:,.0f}",
-            f"£{row['Gross Profit']:,.0f}",
-            f"{row['Margin %']:.1f}%"
-        ])
+        branch_data.append([row['Branch'], f"£{row['Revenue']:,.0f}", f"£{row['Cost']:,.0f}",
+                          f"£{row['Gross Profit']:,.0f}", f"{row['Margin %']:.1f}%"])
     
-    branch_table = Table(branch_data, colWidths=[1.5*inch, 1.3*inch, 1.3*inch, 1.3*inch, 1*inch])
+    branch_table = Table(branch_data, colWidths=[1.3*inch, 1.2*inch, 1.2*inch, 1.2*inch, 1.0*inch])
     branch_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2ecc71')),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#27ae60')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#ecf0f1')]),
+        ('TOPPADDING', (0, 0), (-1, -1), 10)
     ]))
-    
     story.append(branch_table)
     story.append(Spacer(1, 0.3*inch))
     
-    story.append(PageBreak())
-    story.append(Paragraph("Detailed Performance Data", styles['Heading2']))
-    story.append(Spacer(1, 0.1*inch))
-    
-    detail_data = [['Period', 'Branch', 'Revenue', 'Costs', 'Profit', 'Margin %']]
-    for _, row in filtered_df.iterrows():
-        detail_data.append([
-            row['Period'],
-            row['Branch'],
-            f"£{row['Revenue']:,.0f}",
-            f"£{row['Cost']:,.0f}",
-            f"£{row['Gross Profit']:,.0f}",
-            f"{row['Margin %']:.1f}%"
-        ])
-    
-    detail_table = Table(detail_data, colWidths=[0.8*inch, 1.3*inch, 1.2*inch, 1.2*inch, 1.2*inch, 0.9*inch])
-    detail_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e74c3c')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey])
-    ]))
-    
-    story.append(detail_table)
-    
-    story.append(Spacer(1, 0.5*inch))
-    footer_style = ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, textColor=colors.grey, alignment=TA_CENTER)
-    story.append(Paragraph(f"Report generated by {config['client']['name']} Dashboard System", footer_style))
-    story.append(Paragraph(f"Confidential - For internal use only", footer_style))
+    # FOOTER
+    footer = f'<para alignment="center" fontSize="9" textColor="#888"><b>{config["client"]["name"]} Advanced Analytics</b><br/>Generated {datetime.now():%d %B %Y}<br/><i>Professional report - Updated anytime with one click</i></para>'
+    story.append(Paragraph(footer, body_style))
     
     doc.build(story)
     buffer.seek(0)
@@ -397,21 +427,18 @@ col5.metric("Periods", num_periods)
 
 st.divider()
 
-# === PDF EXPORT BUTTON ===
-col1, col2, col3 = st.columns([1, 1, 1])
 with col2:
-    if st.button("📄 Export to PDF", type="primary", use_container_width=True):
-        with st.spinner("Generating PDF report..."):
-            pdf_buffer = generate_pdf(filtered_df, branch_totals, total_revenue, total_cost, total_profit, avg_margin)
+    if st.button("📄 EXPORT PREMIUM PDF REPORT", type="primary", use_container_width=True):
+        with st.spinner("Generating your quality executive report..."):
+            pdf_buffer = generate_premium_pdf(filtered_df, branch_totals, total_revenue, total_cost, total_profit, avg_margin)
             st.download_button(
-                label="⬇️ Download PDF Report",
+                label="⬇️ Download Professional Report (Worth £500+ from consultants!)",
                 data=pdf_buffer,
-                file_name=f"Dashboard_Report_{datetime.now():%Y%m%d_%H%M}.pdf",
+                file_name=f"Executive_Dashboard_Report_{datetime.now():%Y%m%d_%H%M}.pdf",
                 mime="application/pdf",
                 use_container_width=True
             )
-            st.success("✅ PDF generated successfully!")
-
+            st.success("✅ Premium report generated! This alone costs £500+ from consultancy firms.")
 st.divider()
 
 # === TABS ===
