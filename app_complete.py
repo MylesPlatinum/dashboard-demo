@@ -14,6 +14,8 @@ from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER
 import plotly.io as pio
 from reportlab.platypus import Image as RLImage
+import plotly.io as pio
+pio.kaleido.scope.mathjax = None
 
 # === PAGE CONFIG ===
 st.set_page_config(
@@ -183,14 +185,14 @@ def load_data():
     return df, branches, revenue_path.name, costs_path.name
 
 def generate_premium_pdf(filtered_df, branch_totals, total_revenue, total_cost, total_profit, avg_margin):
-    """Generate PREMIUM PDF with charts - makes £495 look like theft!"""
+    """Generate PREMIUM PDF with charts"""
     
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=50, leftMargin=50, topMargin=40, bottomMargin=40)
     story = []
     styles = getSampleStyleSheet()
     
-    # Premium styling
+    # Styles
     title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontSize=28, 
                                  textColor=colors.HexColor('#1a1a1a'), spaceAfter=5, 
                                  alignment=TA_CENTER, fontName='Helvetica-Bold')
@@ -234,14 +236,16 @@ def generate_premium_pdf(filtered_df, branch_totals, total_revenue, total_cost, 
     # EXECUTIVE SUMMARY
     story.append(Paragraph("EXECUTIVE SUMMARY", heading_style))
     top_branch = branch_totals.loc[branch_totals['Revenue'].idxmax()]
+    best_margin = branch_totals.loc[branch_totals['Margin %'].idxmax()]
     
-    summary_text = f'<para fontSize="11"><b>Top Performer:</b> {top_branch["Branch"]} with £{top_branch["Revenue"]:,.0f} revenue<br/><b>Analysis:</b> {len(branch_totals)} branches, {len(filtered_df["Period"].unique())} periods, £{total_profit:,.0f} profit</para>'
+    summary_text = f'<para fontSize="11" leading="16"><b>Top Performer:</b> {top_branch["Branch"]} with £{top_branch["Revenue"]:,.0f}<br/><br/><b>Best Margin:</b> {best_margin["Branch"]} at {best_margin["Margin %"]:.1f}%<br/><br/><b>Overview:</b> {len(branch_totals)} branches, {len(filtered_df["Period"].unique())} periods, £{total_profit:,.0f} profit</para>'
     story.append(Paragraph(summary_text, body_style))
     story.append(Spacer(1, 0.2*inch))
     
     summary_data = [
         ['Metric', 'Value', 'Analysis'],
         ['Total Revenue', f'£{total_revenue:,.0f}', f'{len(filtered_df)} transactions'],
+        ['Total Costs', f'£{total_cost:,.0f}', f'{(total_cost/total_revenue*100):.1f}% of revenue'],
         ['Gross Profit', f'£{total_profit:,.0f}', f'{avg_margin:.1f}% margin'],
         ['Active Branches', str(len(branch_totals)), 'All locations']
     ]
@@ -260,49 +264,66 @@ def generate_premium_pdf(filtered_df, branch_totals, total_revenue, total_cost, 
     
     # REVENUE CHART
     story.append(Paragraph("REVENUE TREND ANALYSIS", heading_style))
-    fig_rev = px.line(filtered_df, x='Period_Int', y='Revenue', color='Branch', markers=True,
-                      title="Revenue Performance by Branch",
-                      color_discrete_sequence=px.colors.qualitative.Set2)
-    fig_rev.update_layout(height=400, plot_bgcolor='white', paper_bgcolor='white', showlegend=True,
-                         legend=dict(orientation="h", yanchor="bottom", y=-0.3))
+    story.append(Spacer(1, 0.1*inch))
     
-    # EXPORT CHART AS IMAGE
-    img_bytes = pio.to_image(fig_rev, format='png', width=700, height=400, scale=2)
-    img = io.BytesIO(img_bytes)
-    chart_image = RLImage(img, width=6.5*inch, height=3.7*inch)
-    story.append(chart_image)
+    try:
+        fig_rev = px.line(filtered_df, x='Period_Int', y='Revenue', color='Branch', markers=True,
+                          title="Revenue Performance by Branch",
+                          color_discrete_sequence=px.colors.qualitative.Set2)
+        fig_rev.update_layout(height=400, plot_bgcolor='white', paper_bgcolor='white', showlegend=True,
+                             legend=dict(orientation="h", yanchor="bottom", y=-0.3),
+                             font=dict(size=10))
+        
+        img_bytes = pio.to_image(fig_rev, format='png', width=700, height=400, scale=2)
+        img = io.BytesIO(img_bytes)
+        story.append(RLImage(img, width=6.5*inch, height=3.7*inch))
+    except:
+        story.append(Paragraph("<i>Revenue trend chart available in online dashboard</i>", body_style))
+    
+    story.append(Spacer(1, 0.15*inch))
+    insight = f'<para fontSize="10" textColor="#555"><b>Insight:</b> {top_branch["Branch"]} leads with £{top_branch["Revenue"]:,.0f}. Average: £{(total_revenue/len(branch_totals)):,.0f}/branch</para>'
+    story.append(Paragraph(insight, body_style))
     story.append(PageBreak())
     
-    # BRANCH COMPARISON CHARTS
-    story.append(Paragraph("BRANCH COMPARISON", heading_style))
+    # BRANCH COMPARISON
+    story.append(Paragraph("BRANCH PERFORMANCE COMPARISON", heading_style))
+    story.append(Spacer(1, 0.1*inch))
     
-    fig_branch = px.bar(branch_totals.sort_values('Revenue', ascending=True), y='Branch', x='Revenue',
-                        orientation='h', color='Revenue', color_continuous_scale='Blues', text='Revenue')
-    fig_branch.update_traces(texttemplate='£%{text:,.0f}', textposition='outside')
-    fig_branch.update_layout(height=350, showlegend=False, plot_bgcolor='white')
+    try:
+        fig_branch = px.bar(branch_totals.sort_values('Revenue', ascending=True), y='Branch', x='Revenue',
+                            orientation='h', color='Revenue', color_continuous_scale='Blues', text='Revenue')
+        fig_branch.update_traces(texttemplate='£%{text:,.0f}', textposition='outside')
+        fig_branch.update_layout(height=350, showlegend=False, plot_bgcolor='white', font=dict(size=10))
+        
+        img_bytes2 = pio.to_image(fig_branch, format='png', width=700, height=350, scale=2)
+        story.append(RLImage(io.BytesIO(img_bytes2), width=6.5*inch, height=3.2*inch))
+    except:
+        story.append(Paragraph("<i>Branch revenue chart available in dashboard</i>", body_style))
     
-    img_bytes2 = pio.to_image(fig_branch, format='png', width=700, height=350, scale=2)
-    img2 = io.BytesIO(img_bytes2)
-    story.append(RLImage(img2, width=6.5*inch, height=3.2*inch))
     story.append(Spacer(1, 0.2*inch))
     
-    fig_margin = px.bar(branch_totals.sort_values('Margin %', ascending=True), y='Branch', x='Margin %',
-                        orientation='h', color='Margin %', color_continuous_scale='RdYlGn', text='Margin %')
-    fig_margin.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-    fig_margin.update_layout(height=350, showlegend=False, plot_bgcolor='white')
+    try:
+        fig_margin = px.bar(branch_totals.sort_values('Margin %', ascending=True), y='Branch', x='Margin %',
+                            orientation='h', color='Margin %', color_continuous_scale='RdYlGn', text='Margin %')
+        fig_margin.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+        fig_margin.update_layout(height=350, showlegend=False, plot_bgcolor='white', font=dict(size=10))
+        
+        img_bytes3 = pio.to_image(fig_margin, format='png', width=700, height=350, scale=2)
+        story.append(RLImage(io.BytesIO(img_bytes3), width=6.5*inch, height=3.2*inch))
+    except:
+        story.append(Paragraph("<i>Margin comparison chart available in dashboard</i>", body_style))
     
-    img_bytes3 = pio.to_image(fig_margin, format='png', width=700, height=350, scale=2)
-    img3 = io.BytesIO(img_bytes3)
-    story.append(RLImage(img3, width=6.5*inch, height=3.2*inch))
     story.append(PageBreak())
     
     # BRANCH TABLE
-    branch_data = [['Branch', 'Revenue', 'Costs', 'Profit', 'Margin']]
+    story.append(Paragraph("DETAILED BRANCH PERFORMANCE", heading_style))
+    branch_data = [['Branch', 'Revenue', 'Costs', 'Profit', 'Margin', 'Status']]
     for _, row in branch_totals.iterrows():
+        status = "✓ High" if row['Margin %'] >= avg_margin else "Standard"
         branch_data.append([row['Branch'], f"£{row['Revenue']:,.0f}", f"£{row['Cost']:,.0f}",
-                          f"£{row['Gross Profit']:,.0f}", f"{row['Margin %']:.1f}%"])
+                          f"£{row['Gross Profit']:,.0f}", f"{row['Margin %']:.1f}%", status])
     
-    branch_table = Table(branch_data, colWidths=[1.3*inch, 1.2*inch, 1.2*inch, 1.2*inch, 1.0*inch])
+    branch_table = Table(branch_data, colWidths=[1.2*inch, 1.2*inch, 1.1*inch, 1.2*inch, 0.9*inch, 0.9*inch])
     branch_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#27ae60')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -315,8 +336,52 @@ def generate_premium_pdf(filtered_df, branch_totals, total_revenue, total_cost, 
     story.append(branch_table)
     story.append(Spacer(1, 0.3*inch))
     
+    # COMPLETE DATA
+    story.append(Paragraph("Complete Transaction Data", 
+                          ParagraphStyle('SubH', parent=styles['Heading3'], fontSize=13)))
+    story.append(Spacer(1, 0.1*inch))
+    
+    detail_data = [['Period', 'Date', 'Branch', 'Revenue', 'Costs', 'Profit', 'Margin']]
+    for _, row in filtered_df.iterrows():
+        detail_data.append([row['Period'], row.get('Date Range', '')[:12], row['Branch'],
+                          f"£{row['Revenue']:,.0f}", f"£{row['Cost']:,.0f}",
+                          f"£{row['Gross Profit']:,.0f}", f"{row['Margin %']:.1f}%"])
+    
+    detail_table = Table(detail_data, colWidths=[0.6*inch, 1*inch, 1.1*inch, 1*inch, 1*inch, 1*inch, 0.7*inch])
+    detail_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e74c3c')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+        ('TOPPADDING', (0, 0), (-1, -1), 8)
+    ]))
+    story.append(detail_table)
+    story.append(PageBreak())
+    
+    # RECOMMENDATIONS
+    story.append(Spacer(1, 0.5*inch))
+    story.append(Paragraph("STRATEGIC RECOMMENDATIONS", heading_style))
+    
+    recs = f'<para fontSize="11" leading="16">Based on {len(branch_totals)} branches:<br/><br/><b>1. Replicate Success:</b> {best_margin["Branch"]} achieves {best_margin["Margin %"]:.1f}% margin<br/><br/><b>2. Cost Management:</b> {(total_cost/total_revenue*100):.1f}% cost ratio - room for improvement<br/><br/><b>3. Revenue Growth:</b> {top_branch["Branch"]} demonstrates market potential<br/><br/><b>4. Monitoring:</b> Monthly reviews enable rapid response</para>'
+    story.append(Paragraph(recs, body_style))
+    story.append(Spacer(1, 0.5*inch))
+    
+    # BENEFITS
+    benefits = [[Paragraph("<b>Dashboard Benefits:</b><br/>✓ Real-time visibility<br/>✓ Automated processing<br/>✓ Professional reports<br/>✓ Multi-branch comparison<br/>✓ Trend analysis<br/>✓ Unlimited exports", body_style)]]
+    benefits_table = Table(benefits, colWidths=[6.5*inch])
+    benefits_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#ecf0f1')),
+        ('PADDING', (0, 0), (-1, -1), 15),
+        ('BOX', (0, 0), (-1, -1), 2, colors.HexColor('#3498db'))
+    ]))
+    story.append(benefits_table)
+    story.append(Spacer(1, 0.3*inch))
+    
     # FOOTER
-    footer = f'<para alignment="center" fontSize="9" textColor="#888"><b>{config["client"]["name"]} Advanced Analytics</b><br/>Generated {datetime.now():%d %B %Y}<br/><i>Professional report - Updated anytime with one click</i></para>'
+    footer = f'<para alignment="center" fontSize="9" textColor="#888"><b>{config["client"]["name"]} Analytics</b><br/>{datetime.now():%d %B %Y}<br/><i>Professional report - generated automatically</i></para>'
     story.append(Paragraph(footer, body_style))
     
     doc.build(story)
@@ -427,9 +492,11 @@ col5.metric("Periods", num_periods)
 
 st.divider()
 
+# === PDF EXPORT BUTTON ===
+col1, col2, col3 = st.columns([1, 1, 1])
 with col2:
     if st.button("📄 EXPORT PREMIUM PDF REPORT", type="primary", use_container_width=True):
-        with st.spinner("Generating your quality executive report..."):
+        with st.spinner("🔥 Generating your £5,000-quality executive report..."):
             pdf_buffer = generate_premium_pdf(filtered_df, branch_totals, total_revenue, total_cost, total_profit, avg_margin)
             st.download_button(
                 label="⬇️ Download Professional Report (Worth £500+ from consultants!)",
@@ -439,6 +506,7 @@ with col2:
                 use_container_width=True
             )
             st.success("✅ Premium report generated! This alone costs £500+ from consultancy firms.")
+
 st.divider()
 
 # === TABS ===
