@@ -6,3 +6,5 @@ kaleido==0.2.1
 pyyaml
 openpyxl
 Pillow
+numpy
+pypdf
